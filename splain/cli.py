@@ -1,4 +1,4 @@
-"""CLI entry point for explain."""
+"""CLI entry point for splain."""
 
 from __future__ import annotations
 
@@ -7,13 +7,13 @@ import os
 import sys
 
 from splain.formatter import format_json, format_text
-from splain.model_backend import ModelBackendError, ModelConfig, build_backend
+from splain.model_backend import DEFAULT_OLLAMA_MODEL, ModelBackendError, ModelConfig, build_backend
 from splain.parser import parse_command
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="explain",
+        prog="splain",
         description="Explain a shell command in beginner-friendly language.",
     )
     mode_group = parser.add_mutually_exclusive_group()
@@ -33,18 +33,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output the explanation as JSON.",
     )
     parser.add_argument(
-        "--provider",
-        default=os.environ.get("EXPLAIN_PROVIDER", "offline"),
-        choices=["openai", "ollama", "offline"],
-        help="Explanation backend to use.",
-    )
-    parser.add_argument(
         "--model",
-        help="Model name for the selected provider.",
+        default=os.environ.get("SPLAIN_MODEL", os.environ.get("EXPLAIN_MODEL", DEFAULT_OLLAMA_MODEL)),
+        help="Ollama model name to use.",
     )
     parser.add_argument(
         "--api-base",
-        help="Optional base URL for the selected provider.",
+        default=os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"),
+        help="Optional Ollama base URL.",
     )
     parser.add_argument(
         "command",
@@ -54,14 +50,29 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def explain_command(command_text: str, provider: str, model: str | None, api_base: str | None):
+def explain_command(command_text: str, model: str | None, api_base: str | None):
     try:
         base_command, flags, arguments = parse_command(command_text)
     except ValueError as error:
         raise SystemExit(str(error)) from error
 
-    backend = build_backend(ModelConfig(provider=provider, model=model, api_base=api_base))
+    backend = build_backend(ModelConfig(model=model, api_base=api_base))
     return backend.explain(command_text, base_command, flags, arguments)
+
+
+def render_banner() -> str:
+    return "\n".join(
+        [
+            "  _____ ____  _        _    ___ _   _",
+            " / ____|  _ \\| |      / \\  |_ _| \\ | |",
+            "| (___ | |_) | |     / _ \\  | ||  \\| |",
+            " \\___ \\|  __/| |___ / ___ \\ | || |\\  |",
+            " ____) | |   |_____/_/   \\_\\___|_| \\_|",
+            "|_____/                                  ",
+            "",
+            "Shell commands, explained fast.",
+        ]
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -73,7 +84,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        result = explain_command(args.command, provider=args.provider, model=args.model, api_base=args.api_base)
+        result = explain_command(args.command, model=args.model, api_base=args.api_base)
     except ModelBackendError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
@@ -82,6 +93,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(format_json(result))
     else:
+        print(render_banner())
+        print()
         print(format_text(result, detailed=detailed))
     return 0
 

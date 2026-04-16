@@ -1,10 +1,9 @@
-"""Model-backed explanation providers."""
+"""Ollama-backed explanation provider."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-import os
 from typing import Any
 from urllib import error, request
 
@@ -30,16 +29,18 @@ Return JSON only with this schema:
 
 Rules:
 - Keep wording concise and beginner-friendly.
+- Prefer short sentences and compact explanations.
 - Explain known flags clearly.
 - If a flag is unknown, explanation must be exactly: "Unknown flag, may be system-specific or uncommon."
 - Warn for destructive commands like rm, chmod, chown, dd, mkfs, sudo, or shell redirection that overwrites files.
 - Preserve the exact flag tokens and argument values from the input when possible.
 """
 
+DEFAULT_OLLAMA_MODEL = "llama3.2:1b"
+
 
 @dataclass
 class ModelConfig:
-    provider: str
     model: str | None = None
     api_base: str | None = None
 
@@ -49,14 +50,7 @@ class ModelBackendError(RuntimeError):
 
 
 def build_backend(config: ModelConfig) -> "BaseModelBackend":
-    provider = config.provider.lower()
-    if provider == "openai":
-        return OpenAIBackend(config)
-    if provider == "ollama":
-        return OllamaBackend(config)
-    if provider == "offline":
-        return OfflineBackend(config)
-    raise ModelBackendError(f"Unsupported provider: {config.provider}")
+    return OllamaBackend(config)
 
 
 class BaseModelBackend:
@@ -67,85 +61,19 @@ class BaseModelBackend:
         raise NotImplementedError
 
 
-class OfflineBackend(BaseModelBackend):
-    """Fallback mode when no model service is configured."""
-
-    def explain(self, raw_command: str, base_command: str, flags: list[ParsedFlag], arguments: list[str]) -> ParsedCommand:
-        return ParsedCommand(
-            raw=raw_command,
-            command=base_command,
-            description=(
-                "Model backend not configured. The command structure was parsed locally, "
-                "but semantic explanations require an expert model provider."
-            ),
-            flags=[
-                ParsedFlag(
-                    token=flag.token,
-                    value=flag.value,
-                    explanation=UNKNOWN_FLAG_MESSAGE,
-                    known=False,
-                )
-                for flag in flags
-            ],
-            arguments=arguments,
-            argument_explanations=["Command argument." for _ in arguments],
-            summary=f"This appears to run '{base_command}', but no expert model backend is configured.",
-            suggestions=[],
-        )
-
-
-class OpenAIBackend(BaseModelBackend):
-    def explain(self, raw_command: str, base_command: str, flags: list[ParsedFlag], arguments: list[str]) -> ParsedCommand:
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            raise ModelBackendError("OPENAI_API_KEY is not set.")
-
-        payload = {
-            "model": self.config.model or os.environ.get("EXPLAIN_MODEL", "gpt-5.4-mini"),
-            "input": [
-                {"role": "system", "content": [{"type": "input_text", "text": PROMPT}]},
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": json.dumps(
-                                {
-                                    "raw_command": raw_command,
-                                    "base_command": base_command,
-                                    "flags": [
-                                        {"token": flag.token, "value": flag.value}
-                                        for flag in flags
-                                    ],
-                                    "arguments": arguments,
-                                },
-                                indent=2,
-                            ),
-                        }
-                    ],
-                },
-            ],
-        }
-
-        api_base = self.config.api_base or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
-        response_json = _post_json(
-            f"{api_base.rstrip('/')}/responses",
-            payload,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-        )
-        content = _extract_openai_text(response_json)
-        return _build_result(raw_command, base_command, flags, arguments, content)
-
-
 class OllamaBackend(BaseModelBackend):
     def explain(self, raw_command: str, base_command: str, flags: list[ParsedFlag], arguments: list[str]) -> ParsedCommand:
         payload = {
-            "model": self.config.model or os.environ.get("EXPLAIN_MODEL", "llama3.1"),
+            "model": self.config.model or DEFAULT_OLLAMA_MODEL,
             "stream": False,
             "format": "json",
+            "keep_alive": "10m",
+            "options": {
+                "temperature": 0,
+                "top_p": 0.9,
+                "num_ctx": 2048,
+                "num_predict": 280,
+            },
             "messages": [
                 {"role": "system", "content": PROMPT},
                 {
@@ -160,13 +88,13 @@ class OllamaBackend(BaseModelBackend):
                             ],
                             "arguments": arguments,
                         },
-                        indent=2,
+                        separators=(",", ":"),
                     ),
                 },
             ],
         }
 
-        api_base = self.config.api_base or os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
+        api_base = self.config.api_base or "http://127.0.0.1:11434"
         response_json = _post_json(
             f"{api_base.rstrip('/')}/api/chat",
             payload,
@@ -180,26 +108,15 @@ def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str]) -> di
     body = json.dumps(payload).encode("utf-8")
     req = request.Request(url, data=body, headers=headers, method="POST")
     try:
-        with request.urlopen(req, timeout=30) as response:
+        with request.urlopen(req, timeout=18) as response:
             return json.loads(response.read().decode("utf-8"))
     except error.URLError as exc:
-        raise ModelBackendError(f"Unable to reach model provider at {url}: {exc}") from exc
+        raise ModelBackendError(
+            f"Unable to reach Ollama at {url}: {exc}. Start Ollama and pull '{payload.get('model', DEFAULT_OLLAMA_MODEL)}'."
+        ) from exc
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise ModelBackendError(f"Model provider returned HTTP {exc.code}: {detail}") from exc
-
-
-def _extract_openai_text(response_json: dict[str, Any]) -> str:
-    output = response_json.get("output", [])
-    texts: list[str] = []
-    for item in output:
-        for content_item in item.get("content", []):
-            text = content_item.get("text")
-            if text:
-                texts.append(text)
-    if texts:
-        return "\n".join(texts)
-    raise ModelBackendError("OpenAI response did not contain text output.")
+        raise ModelBackendError(f"Ollama returned HTTP {exc.code}: {detail}") from exc
 
 
 def _build_result(

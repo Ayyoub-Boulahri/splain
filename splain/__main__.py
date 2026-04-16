@@ -1,4 +1,4 @@
-"""Module runner for python -m explain."""
+"""Module runner for python -m splain."""
 
 from splain.cli import main
 

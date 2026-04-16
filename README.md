@@ -13,7 +13,7 @@
 * 📦 Identifies arguments and their roles
 * 🧠 Beginner-friendly explanations
 * ⚡ Fast and lightweight
-* 🔧 Extensible command database
+* 🤖 Ollama-powered explanations only
 
 ---
 
@@ -24,7 +24,7 @@
 ```bash
 git clone https://github.com/yourusername/splain.git
 cd splain
-pip install -r requirements.txt
+pip install .
 ```
 
 ### Option 2: (Optional) Install globally
@@ -38,10 +38,11 @@ pip install .
 ## 💡 Usage
 
 ```bash
-python3 -m splain --provider "yourprovider (openai or ollama)" --model "your model" "your command"
-example : 
-python3 -m explain --provider ollama --model llama3.1 "tar -xzvf file.tar.gz"
+python3 -m splain --model llama3.2:1b "tar -xzvf file.tar.gz"
 ```
+
+By default, `splain` talks to Ollama at `http://127.0.0.1:11434`.
+You can override that with `--api-base` or `OLLAMA_HOST`.
 
 ### Example Output
 
@@ -72,11 +73,14 @@ This command extracts the contents of 'file.tar.gz' using gzip compression and d
 splain "<command>" [options]
 ```
 
-| Option  | Description              |
-| ------- | ------------------------ |
+| Option | Description |
+| ------ | ----------- |
 | --short | Show shorter explanation |
-| --json  | Output as JSON           |
-| --help  | Show help menu           |
+| --detailed | Show the full explanation output |
+| --json | Output as JSON |
+| --model | Choose the Ollama model to use |
+| --api-base | Set a custom Ollama base URL |
+| --help | Show help menu |
 
 ---
 
@@ -88,9 +92,9 @@ splain "<command>" [options]
    * flags (including grouped flags like `-xzvf`)
    * arguments
 
-2. Matches against a built-in command database
+2. Sends the parsed structure to Ollama with a compact prompt
 
-3. Generates a structured explanation
+3. Prints a structured explanation with the `SPLAIN` startup banner
 
 ---
 
@@ -99,7 +103,6 @@ splain "<command>" [options]
 ## 🔮 Roadmap
 
 * [ ] Support more shell commands
-* [ ] AI-powered explanations
 * [ ] Command suggestions
 * [ ] Interactive mode
 * [ ] Plugin system

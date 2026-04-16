@@ -1,2 +1,1 @@
-"""explain package."""
-
+"""splain package."""
